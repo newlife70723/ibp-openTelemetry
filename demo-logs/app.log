@@ -1,0 +1,6 @@
+{"level":"INFO","msg":"hello log 1","service":"demo-web","ts":"2025-09-19T13:49:00Z"}
+{"level":"INFO","msg":"hello log 2","service":"demo-web","ts":"2025-09-19T13:49:00Z"}
+{"level":"INFO","msg":"hello log 3","service":"demo-web","ts":"2025-09-19T13:49:00Z"}
+{"level":"INFO","msg":"hello log 4","service":"demo-web","ts":"2025-09-19T13:49:00Z"}
+{"level":"INFO","msg":"hello log 5","service":"demo-web","ts":"2025-09-19T13:49:00Z"}
+{"ts":"2025-09-19T06:05:00Z","level":"INFO","service":"demoweb","msg":"user clicked","user":"u42"}

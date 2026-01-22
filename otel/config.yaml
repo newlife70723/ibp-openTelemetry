@@ -1,0 +1,93 @@
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins: ["http://localhost:3000", "http://127.0.0.1:3000"]
+          allowed_headers:
+            [
+              "Content-Type",
+              "traceparent",
+              "tracestate",
+              "baggage",
+              "Authorization",
+            ]
+
+  filelog:
+    include: [/var/demo-logs/*.log]
+    start_at: beginning
+    operators:
+      - type: json_parser
+        parse_from: body
+        on_error: send
+      - type: time_parser
+        parse_from: body.ts
+        layout: "%Y-%m-%dT%H:%M:%SZ"
+      - type: severity_parser
+        parse_from: body.level
+      - type: move
+        from: body.service
+        to: attributes.service
+      - type: move
+        from: body.msg
+        to: attributes.msg
+
+processors:
+  memory_limiter:
+    check_interval: 2s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
+    send_batch_size: 1024
+    timeout: 1s
+
+exporters:
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+  loki:
+    endpoint: http://loki:3100/loki/api/v1/push
+  prometheus:
+    endpoint: "0.0.0.0:8889"
+  elasticsearch:
+    endpoints: ["http://elasticsearch:9200"]
+    user: elastic
+    password: ${ELASTIC_PASSWORD}
+    logs_index: "otel-logs"
+    traces_index: "otel-traces"
+    flush:
+      interval: 1s
+      bytes: 1048576
+  logging:
+    verbosity: normal
+  otlphttp/apm:
+    endpoint: http://apm-server:8200
+    headers:
+      Authorization: "Bearer devtoken"
+
+service:
+  telemetry:
+    logs:
+      level: debug
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging, elasticsearch, otlphttp/apm, otlp/tempo]
+    logs:
+      receivers: [otlp, filelog]
+      processors: [memory_limiter, batch]
+      exporters: [logging, elasticsearch, otlphttp/apm, loki]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [logging, prometheus]

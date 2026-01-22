@@ -1,0 +1,143 @@
+services:
+  apm-server:
+    image: docker.elastic.co/apm/apm-server:8.16.0
+    container_name: apm-server
+    depends_on:
+      - elasticsearch
+      - kibana
+    ports:
+      - "8200:8200"
+    environment:
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:9200"
+      ELASTICSEARCH_USERNAME: "elastic"
+      ELASTICSEARCH_PASSWORD: "${ELASTIC_PASSWORD}"
+      APM_SECRET_TOKEN: "${APM_SECRET_TOKEN}"
+    command: >
+      apm-server -e
+        -E output.elasticsearch.hosts=["http://elasticsearch:9200"]
+        -E output.elasticsearch.username=elastic
+        -E output.elasticsearch.password=${ELASTIC_PASSWORD}
+        -E apm-server.kibana.enabled=true
+        -E apm-server.kibana.host=kibana:5601
+        -E apm-server.otlp.enabled=true
+        -E apm-server.otlp.grpc.enabled=true
+        -E apm-server.otlp.http.enabled=true
+        -E apm-server.auth.secret_token=devtoken
+    networks: [esnet]
+
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.14.3
+    container_name: es01
+    environment:
+      - node.name=es01
+      - cluster.name=es-docker-single
+      - discovery.type=single-node
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+      - xpack.security.http.ssl.enabled=false
+    ports: ["9200:9200"]
+    volumes: ["es-data-v2:/usr/share/elasticsearch/data"]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "-u", "elastic:${ELASTIC_PASSWORD}", "http://localhost:9200"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks: [esnet]
+
+  setup:
+    image: curlimages/curl:8.6.0
+    user: "0:0"                         
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD}
+    volumes:
+      - es-token:/token
+    command:
+      - sh
+      - -e
+      - -c
+      - >
+        echo "Creating Kibana service account token..." ;
+        RESP=$(curl -sS -u elastic:${ELASTIC_PASSWORD} -X POST 'http://elasticsearch:9200/_security/service/elastic/kibana/credential/token/kibana-token-1') ;
+        echo "$RESP" > /token/token.json ;
+        echo "$RESP" | sed -n 's/.*"value"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' > /token/token.value ;
+        chmod 0644 /token/token.value ;                          # ← 讓 Kibana 可讀
+        test -s /token/token.value && echo "Token saved to /token/token.value"
+    networks: [esnet]
+    restart: "no"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.14.3
+    container_name: kib01
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - ELASTICSEARCH_SERVICEACCOUNTTOKEN=${KIBANA_SERVICE_TOKEN}
+      - SERVER_PUBLICBASEURL=http://localhost:5601
+    ports: ["5601:5601"]
+    networks: [esnet]
+  
+  prometheus:
+    image: prom/prometheus:v2.49.1
+    container_name: prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9090:9090"
+    networks: [esnet]
+    depends_on:
+      - otelcol
+
+  otelcol:
+    image: otel/opentelemetry-collector-contrib:0.102.0
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./otel/config.yaml:/etc/otelcol-contrib/config.yaml:ro
+      - ./demo-logs:/var/demo-logs:ro   
+    environment:
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD}   
+      - APM_SECRET_TOKEN=${APM_SECRET_TOKEN} 
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "13133:13133"
+      - "8889:8889"
+    networks: [esnet]
+    depends_on:
+      - elasticsearch
+    container_name: otelcol
+
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: loki
+    ports:
+      - "3100:3100"
+    volumes:
+      - ./loki/loki.yml:/etc/loki/loki.yml:ro
+      - loki-data:/loki
+    command: -config.file=/etc/loki/loki.yml
+    networks: [esnet]
+
+  tempo:
+    image: grafana/tempo:2.3.1
+    container_name: tempo
+    command: ["-config.file=/etc/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"  
+      - "4319:4317"   
+      - "4320:4318"   
+    networks: [esnet]
+
+
+
+networks: { esnet: {} }
+volumes: { es-data-v2: {}, es-token: {}, loki-data: {}, tempo-data: {} }
